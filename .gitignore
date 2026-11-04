@@ -1,0 +1,9 @@
+# Never commit mail, digests or health reports.
+digests/
+*.health.json
+ALL-FOLDERS-*.json
+__pycache__/
+*.pyc
+.DS_Store
+# The snapshot rule above also matches these on case-insensitive file systems.
+!flows/*.definition.json

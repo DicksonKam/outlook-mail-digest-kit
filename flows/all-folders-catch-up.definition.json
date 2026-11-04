@@ -1,0 +1,191 @@
+{
+  "_note": "Reference definition for rebuilding this flow by hand. Not an importable package.",
+  "displayName": "Outlook Digest - All Folders Catch-up",
+  "connectionReferences": {
+    "shared_office365-1": {
+      "connector": "shared_office365",
+      "connectionName": "<YOUR_SHARED_OFFICE365_1_CONNECTION>"
+    },
+    "shared_onedriveforbusiness": {
+      "connector": "shared_onedriveforbusiness",
+      "connectionName": "<YOUR_SHARED_ONEDRIVEFORBUSINESS_CONNECTION>"
+    }
+  },
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "undefined",
+    "parameters": {
+      "$authentication": {
+        "defaultValue": {},
+        "type": "SecureObject"
+      },
+      "$connections": {
+        "defaultValue": {},
+        "type": "Object"
+      }
+    },
+    "triggers": {
+      "Recurrence": {
+        "recurrence": {
+          "interval": 15,
+          "frequency": "Minute"
+        },
+        "evaluatedRecurrence": {
+          "interval": 15,
+          "frequency": "Minute"
+        },
+        "type": "Recurrence",
+        "runtimeConfiguration": {
+          "concurrency": {
+            "runs": 1
+          }
+        }
+      }
+    },
+    "actions": {
+      "Send_an_HTTP_request": {
+        "runAfter": {
+          "Do_until": [
+            "Succeeded"
+          ]
+        },
+        "type": "OpenApiConnection",
+        "inputs": {
+          "parameters": {
+            "Uri": "https://graph.microsoft.com/v1.0/me/mailFolders?$top=100&$select=id,displayName,parentFolderId,childFolderCount,totalItemCount",
+            "Method": "GET",
+            "ContentType": "application/json"
+          },
+          "host": {
+            "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365",
+            "connectionName": "shared_office365-1",
+            "operationId": "HttpRequest"
+          },
+          "authentication": "@parameters('$authentication')"
+        }
+      },
+      "Initialize_variable": {
+        "runAfter": {},
+        "type": "InitializeVariable",
+        "inputs": {
+          "variables": [
+            {
+              "name": "NextLink",
+              "type": "string",
+              "value": "https://graph.microsoft.com/v1.0/me/messages?$top=20&$filter=receivedDateTime ge @{formatDateTime(addDays(utcNow(),-7),'yyyy-MM-ddTHH:mm:ssZ')} and isDraft eq false&$select=id,internetMessageId,subject,receivedDateTime,sentDateTime,from,toRecipients,ccRecipients,body,parentFolderId,isDraft,hasAttachments,conversationId,importance&$orderby=receivedDateTime desc&$expand=attachments($select=name,contentType,size,isInline)"
+            }
+          ]
+        }
+      },
+      "Initialize_variable_1": {
+        "runAfter": {
+          "Initialize_variable": [
+            "Succeeded"
+          ]
+        },
+        "type": "InitializeVariable",
+        "inputs": {
+          "variables": [
+            {
+              "name": "Messages",
+              "type": "array",
+              "value": "@json('[]')"
+            }
+          ]
+        }
+      },
+      "Do_until": {
+        "actions": {
+          "Send_an_HTTP_request_1": {
+            "limit": {
+              "timeout": "PT1M"
+            },
+            "type": "OpenApiConnection",
+            "inputs": {
+              "parameters": {
+                "Uri": "@variables('NextLink')",
+                "Method": "GET",
+                "CustomHeader1": "Prefer: outlook.body-content-type=\"text\"",
+                "ContentType": "application/json"
+              },
+              "host": {
+                "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365",
+                "connectionName": "shared_office365-1",
+                "operationId": "HttpRequest"
+              },
+              "retryPolicy": {
+                "type": "exponential",
+                "count": 3,
+                "interval": "PT10S",
+                "minimumInterval": "PT5S",
+                "maximumInterval": "PT30S"
+              },
+              "authentication": "@parameters('$authentication')"
+            }
+          },
+          "Append_to_array_variable": {
+            "runAfter": {
+              "Send_an_HTTP_request_1": [
+                "Succeeded"
+              ]
+            },
+            "type": "AppendToArrayVariable",
+            "inputs": {
+              "name": "Messages",
+              "value": "@body('Send_an_HTTP_request_1')"
+            }
+          },
+          "Set_variable": {
+            "runAfter": {
+              "Append_to_array_variable": [
+                "Succeeded"
+              ]
+            },
+            "type": "SetVariable",
+            "inputs": {
+              "name": "NextLink",
+              "value": "@coalesce(body('Send_an_HTTP_request_1')?['@odata.nextLink'],'')"
+            }
+          }
+        },
+        "runAfter": {
+          "Initialize_variable_1": [
+            "Succeeded"
+          ]
+        },
+        "expression": "@or(empty(variables('NextLink')),not(equals(actions('Set_variable')?['status'],'Succeeded')))",
+        "limit": {
+          "count": 500,
+          "timeout": "PT10M"
+        },
+        "type": "Until"
+      },
+      "Create_file": {
+        "runAfter": {
+          "Send_an_HTTP_request": [
+            "Succeeded"
+          ]
+        },
+        "type": "OpenApiConnection",
+        "inputs": {
+          "parameters": {
+            "folderPath": "/Outlook Reader/Emails",
+            "name": "ALL-FOLDERS-@{formatDateTime(utcNow(),'yyyy-MM-dd')}.json",
+            "body": "@string(setProperty(setProperty(setProperty(setProperty(setProperty(json('{\"schema\":\"outlook-reader-all-folders-v1\"}'),'collectedAt',utcNow()),'windowStart',formatDateTime(addDays(utcNow(),-7),'yyyy-MM-ddTHH:mm:ssZ')),'complete',empty(variables('NextLink'))),'folders',body('Send_an_HTTP_request')),'pages',variables('Messages')))"
+          },
+          "host": {
+            "apiId": "/providers/Microsoft.PowerApps/apis/shared_onedriveforbusiness",
+            "connectionName": "shared_onedriveforbusiness",
+            "operationId": "CreateFile"
+          },
+          "authentication": "@parameters('$authentication')"
+        },
+        "runtimeConfiguration": {
+          "contentTransfer": {
+            "transferMode": "Chunked"
+          }
+        }
+      }
+    }
+  }
+}
